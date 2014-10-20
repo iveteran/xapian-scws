@@ -370,6 +370,11 @@ Xapian::Query::Internal::accumulate_terms(
 	// Not a leaf, concatenate results from all subqueries.
 	for (subquery_list::const_iterator i = subqs.begin(); i != end; ++i) {
 	    (*i)->accumulate_terms(terms);
+#ifdef HAVE_SCWS
+        // hightman: strip unused term for highlight/reform query log
+        if (op == OP_AND_MAYBE || op == OP_AND_NOT)
+        break;
+#endif
 	}
     }
 }

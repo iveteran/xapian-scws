@@ -74,6 +74,17 @@ TermGenerator::set_database(const Xapian::WritableDatabase &db)
     internal->db = db;
 }
 
+#if 1	/* HAVE_SCWS */
+/// hightman.20070701: load the specified dict file for scws
+void
+TermGenerator::load_libscws(const char *fpath, bool xmem, int multi)
+{
+#ifdef HAVE_SCWS
+    internal->load_libscws(fpath, xmem, multi);
+#endif
+}
+#endif
+
 TermGenerator::flags
 TermGenerator::set_flags(flags toggle, flags mask)
 {

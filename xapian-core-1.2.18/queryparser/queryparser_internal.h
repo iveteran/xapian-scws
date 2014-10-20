@@ -29,6 +29,11 @@
 #include <xapian/queryparser.h>
 #include <xapian/stem.h>
 
+/// hightman.20070701: use scws as default tokneizer
+#ifdef HAVE_SCWS
+#include <scws/scws.h>
+#endif
+
 #include <list>
 #include <map>
 
@@ -63,6 +68,12 @@ class QueryParser::Internal : public Xapian::Internal::RefCntBase {
     Stem stemmer;
     stem_strategy stem_action;
     const Stopper * stopper;
+#ifdef HAVE_SCWS
+    scws_t scws;
+    scws_res_t rptr, rcur;
+    const char *qptr;
+    int last_off;
+#endif
     Query::op default_op;
     const char * errmsg;
     Database db;
@@ -88,8 +99,16 @@ class QueryParser::Internal : public Xapian::Internal::RefCntBase {
 
   public:
     Internal() : stem_action(STEM_NONE), stopper(NULL),
+#ifdef HAVE_SCWS
+	scws(NULL), rptr(NULL), rcur(NULL),
+#endif
 	default_op(Query::OP_OR), errmsg(NULL), max_wildcard_expansion(0) { }
+#ifdef HAVE_SCWS
+    ~Internal();
+    void load_libscws(const char *fpath, bool xmem, int multi);
+#endif
     Query parse_query(const string & query_string, unsigned int flags, const string & default_prefix);
+
 };
 
 }

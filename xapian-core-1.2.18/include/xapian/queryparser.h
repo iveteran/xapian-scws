@@ -559,6 +559,15 @@ class XAPIAN_VISIBILITY_DEFAULT QueryParser {
      */
     void set_max_wildcard_expansion(Xapian::termcount limit);
 
+#if 1   /* HAVE_SCWS */
+    /** hightman.20070706: Specify the dict and rules file for scws, only used when HAVE_SCWS.
+     *  @param fpath    path for dict file and rule file (char *)
+     *  @param xmem whether to load whold dict into memory(default to false)
+     *  @param multi    multiset (int 0~15)
+     */
+    void load_libscws(const char *fpath, bool xmem = false, int multi = 0);
+#endif
+
     /** Parse a query.
      *
      *  @param query_string  A free-text query as entered by a user

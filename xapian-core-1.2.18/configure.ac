@@ -2,7 +2,7 @@ dnl Process this file with autoconf to produce a configure script.
 
 dnl NB When updating the version for a release, update LIBRARY_VERSION_INFO
 dnl below too.
-AC_INIT([xapian-core], [1.2.18], [http://xapian.org/bugs])
+AC_INIT([xapian-core-scws], [1.2.18], [http://xapian.org/bugs])
 dnl See HACKING document for details of the reasons for required versions.
 AC_PREREQ([2.64])
 dnl Extract from the libtool info manual:
@@ -1085,6 +1085,62 @@ fi
 if test yes = "$enable_log"; then
   AC_DEFINE(XAPIAN_DEBUG_LOG,,
     [Define if you want a log of methods called and other debug messages])
+fi
+
+dnl **********************
+dnl * Check scws library *
+dnl **********************
+dnl hightman.20110411: See if we want to use scws as default tokenizer
+SCWS_DIR=""
+AC_MSG_CHECKING(for scws)
+AC_ARG_WITH(scws,
+  [AS_HELP_STRING([--with-scws@<:@=DIR@:>@], [use scws as default tokenizer, DIR is the install PREFIX of scws])],
+  [ ],[ with_scws=no ]
+)
+
+if test "$with_scws" = "no"; then
+  AC_MSG_RESULT(no)
+else
+  # Check header file
+  if test "$with_scws" = "yes"; then
+    searchdirs="/usr /usr/local /usr/local/scws /opt/local"
+    for tmpdir in $searchdirs ; do
+      if test -f $tmpdir/include/scws/scws.h ; then
+        SCWS_DIR=$tmpdir
+        break
+      fi
+    done
+    if test "$SCWS_DIR" = ""; then
+      AC_MSG_RESULT(no)
+      AC_MSG_ERROR([scws not found on default search directories, specify DIR plz...])
+    fi
+  elif test -f $withval/include/scws/scws.h ; then
+    SCWS_DIR=$withval
+  else
+    AC_MSG_RESULT(no)
+    AC_MSG_ERROR([Invalid scws directory, unable to find the scws.h under $withval/include/scws])
+  fi
+  AC_MSG_RESULT([yes: $SCWS_DIR])
+
+  # Etc directory
+  if test "$SCWS_DIR" = "/usr"; then
+    SCWS_ETCDIR="/etc"
+  else
+    SCWS_ETCDIR="$SCWS_DIR/etc"
+  fi
+
+  # Check scws library
+  AC_CHECK_LIB(scws, scws_new, [
+    LIBS="$LIBS -L$SCWS_DIR/lib -lscws"
+    XAPIAN_LDFLAGS="$XAPIAN_LDFLAGS -L$SCWS_DIR/lib -lscws"
+    CPPFLAGS="$CPPFLAGS -I$SCWS_DIR/include"
+    AC_DEFINE(HAVE_SCWS, 1, [Define to 1 if you want to use scws as default tokenizer])
+    AC_DEFINE_UNQUOTED(SCWS_ETCDIR, "$SCWS_ETCDIR", [Resources directory of scws to load dictionary and rules])
+  ],[
+    AC_MSG_ERROR([scws_new() NOT found in libscws, please check it first.])
+  ],[
+    -L$SCWS_DIR/lib
+  ])
 fi
 
 dnl ******************************

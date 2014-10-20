@@ -26,6 +26,10 @@
 #include <xapian/document.h>
 #include <xapian/termgenerator.h>
 #include <xapian/stem.h>
+/// hightman.20070701: use scws as default tokneizer
+#ifdef HAVE_SCWS
+#include <scws/scws.h>
+#endif
 
 namespace Xapian {
 
@@ -38,13 +42,23 @@ class TermGenerator::Internal : public Xapian::Internal::RefCntBase {
     const Stopper * stopper;
     Document doc;
     termcount termpos;
+#ifdef HAVE_SCWS
+    scws_t scws;
+#endif
     TermGenerator::flags flags;
     unsigned max_word_length;
     WritableDatabase db;
 
   public:
     Internal() : strategy(STEM_SOME), stopper(NULL), termpos(0),
+#ifdef HAVE_SCWS
+	scws(NULL),
+#endif
 	flags(TermGenerator::flags(0)), max_word_length(64) { }
+#ifdef HAVE_SCWS
+    ~Internal();
+    void load_libscws(const char *fpath, bool xmem, int multi);
+#endif
     void index_text(Utf8Iterator itor,
 		    termcount weight,
 		    const std::string & prefix,

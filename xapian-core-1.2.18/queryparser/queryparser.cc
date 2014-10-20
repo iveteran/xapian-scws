@@ -110,6 +110,17 @@ QueryParser::set_max_wildcard_expansion(Xapian::termcount max)
     internal->max_wildcard_expansion = max;
 }
 
+#if 1	/* HAVE_SCWS */
+/// hightman.20070701: load the specified dict file for scws
+void
+QueryParser::load_libscws(const char *fpath, bool xmem, int multi)
+{
+#ifdef HAVE_SCWS
+    internal->load_libscws(fpath, xmem, multi);
+#endif
+}
+#endif
+
 Query
 QueryParser::parse_query(const string &query_string, unsigned flags,
 			 const string &default_prefix)

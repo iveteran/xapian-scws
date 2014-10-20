@@ -160,6 +160,9 @@ class Term {
     string unstemmed;
     QueryParser::stem_strategy stem;
     termpos pos;
+#ifdef HAVE_SCWS
+    vector<string> multi;
+#endif
 
     Term(const string &name_, termpos pos_) : name(name_), stem(QueryParser::STEM_NONE), pos(pos_) { }
     Term(const string &name_) : name(name_), stem(QueryParser::STEM_NONE), pos(0) { }
@@ -313,10 +316,15 @@ Term::get_query_with_synonyms() const
     for (piter = prefixes.begin(); piter != prefixes.end(); ++piter) {
 	// First try the unstemmed term:
 	string term;
+	/* hightman.111231: Synonym optimization　*/
+#ifdef HAVE_SCWS
+	termpos mpos = pos + 77;
+#else
 	if (!piter->empty()) {
 	    term += *piter;
 	    if (prefix_needs_colon(*piter, name[0])) term += ':';
 	}
+#endif
 	term += name;
 
 	Xapian::Database db = state->get_database();
@@ -325,16 +333,28 @@ Term::get_query_with_synonyms() const
 	if (syn == end && stem != QueryParser::STEM_NONE) {
 	    // If that has no synonyms, try the stemmed form:
 	    term = 'Z';
+#ifndef HAVE_SCWS
 	    if (!piter->empty()) {
 		term += *piter;
 		if (prefix_needs_colon(*piter, name[0])) term += ':';
 	    }
+#endif
 	    term += state->stem_term(name);
 	    syn = db.synonyms_begin(term);
 	    end = db.synonyms_end(term);
 	}
 	while (syn != end) {
+#ifdef HAVE_SCWS
+	    string sterm = *syn;
+	    if (!piter->empty()) {
+		if (sterm[0] == 'Z') sterm = "Z" + *piter + sterm.substr(1);
+		else sterm = *piter + sterm;
+	    }
+
+	    q = Query(Query::OP_SYNONYM, q, Query(sterm, 1, mpos++));
+#else
 	    q = Query(Query::OP_SYNONYM, q, Query(*syn, 1, pos));
+#endif
 	    ++syn;
 	}
     }
@@ -452,6 +472,58 @@ Term::as_cjk_query() const
     vector<Query> prefix_cjk;
     const list<string> & prefixes = prefix_info->prefixes;
     list<string>::const_iterator piter;
+/* hightman.20111223: used CJKTERM for multi segment */
+#ifdef HAVE_SCWS
+    for (piter = prefixes.begin(); piter != prefixes.end(); ++piter) {
+	Query org = Query(*piter + name, 1, pos); 
+	termpos mpos = pos + 88;
+
+	/* hightman.20120104: get synonyms */
+	if (state->flags & QueryParser::FLAG_AUTO_SYNONYMS) {
+	    Xapian::Database db = state->get_database();
+	    Xapian::TermIterator syn = db.synonyms_begin(name);
+	    Xapian::TermIterator end = db.synonyms_end(name);
+	    while (syn != end) {
+		org = Query(Query::OP_SYNONYM, org, Query(*piter + *syn, 1, mpos++));
+		++syn;
+	    }
+	}
+
+        if (state->flags & QueryParser::FLAG_PARTIAL) {
+            Xapian::Database db = state->get_database();
+            Xapian::TermIterator tem = db.allterms_begin(*piter + name);
+            Xapian::TermIterator end = db.allterms_end(*piter + name);
+            while (tem != end) {
+                //org = Query(Query::OP_SYNONYM, org, Query(*piter + *tem, 1, mpos++));
+		if(*piter + name != *tem)
+                org = Query(Query::OP_SYNONYM, org, Query(*tem, 1, mpos++));
+                ++tem;
+            }
+        }
+/*	
+       else if (state->flags & QueryParser::FLAG_PARTIAL) {
+            Xapian::Database db = state->get_database();
+            Xapian::TermIterator syn = db.synonyms_begin(name);
+            Xapian::TermIterator end = db.synonyms_end(name);
+            while (syn != end) {
+                org = Query(Query::OP_SYNONYM, org, Query(*piter + *syn, 1, mpos++));
+                ++syn;
+            }
+        }
+*/
+	if (!multi.empty()) {
+	    vector<string>::const_iterator mi;
+	    vector<Query> multi_cjk;
+	    for (mi = multi.begin(); mi != multi.end(); ++mi) {
+		// hightman: force to sort behind for get_terms()
+		multi_cjk.push_back(Query(*piter + *mi, 1, mpos++));
+	    }
+	    Query syn = Query(state->default_op(), multi_cjk.begin(), multi_cjk.end());
+	    org = Query(Query::OP_SYNONYM, org, syn);
+	}
+	prefix_cjk.push_back(org);
+    }
+#else
     for (CJKTokenIterator tk(name); tk != CJKTokenIterator(); ++tk) {
 	for (piter = prefixes.begin(); piter != prefixes.end(); ++piter) {
 	    string cjk = *piter;
@@ -459,6 +531,7 @@ Term::as_cjk_query() const
 	    prefix_cjk.push_back(Query(cjk, 1, pos));
 	}
     }
+#endif	/* HAVE_SCWS */
     Query * q = new Query(Query::OP_AND, prefix_cjk.begin(), prefix_cjk.end());
     delete this;
     return q;
@@ -572,12 +645,78 @@ QueryParser::Internal::add_prefix(const string &field, const string &prefix,
    }
 }
 
+/// hightman.20110701: load libscws
+#ifdef HAVE_SCWS
+QueryParser::Internal::~Internal()
+{
+    if (rptr != NULL) {
+	scws_free_result(rptr);
+	rptr = NULL;
+    }    
+    if (scws != NULL) {
+	scws_free(scws);
+	scws = NULL;
+    }    
+}
+
+void
+QueryParser::Internal::load_libscws(const char *fpath, bool xmem, int multi)
+{
+    if (scws == NULL) {
+	string temp;
+
+	scws = scws_new();
+	scws_set_charset(scws, "utf8");
+	scws_set_ignore(scws, SCWS_NA);
+	scws_set_duality(scws, SCWS_YEA);
+
+	temp = string(fpath ? fpath : SCWS_ETCDIR) + string("/rules.utf8.ini");
+	scws_set_rule(scws, temp.data());
+	temp = string(fpath ? fpath : SCWS_ETCDIR) + string("/dict.utf8.xdb");
+	scws_set_dict(scws, temp.data(), xmem == true ? SCWS_XDICT_MEM : SCWS_XDICT_XDB);
+	/* hightman.20111209: custom dict support */
+	temp = string(fpath ? fpath : SCWS_ETCDIR) + string("/dict_user.txt");
+	scws_add_dict(scws, temp.data(), SCWS_XDICT_TXT);
+    }
+    if (multi >= 0 && multi < 0x10)
+	scws_set_multi(scws, (multi<<12));
+}
+#endif	/* HAVE_SCWS */
+
 string
 QueryParser::Internal::parse_term(Utf8Iterator &it, const Utf8Iterator &end,
 				  bool cjk_ngram, bool & is_cjk_term,
 				  bool &was_acronym)
 {
     string term;
+#ifdef HAVE_SCWS
+    int off = it.raw() - qptr;
+    while (rcur && (off > rcur->off)) {
+	rcur = rcur->next;
+    }
+    was_acronym = false;
+    if (rcur == NULL) { 
+	it = end;
+	term.resize(0);
+    } else {
+	// sometimes, auto_duality + word-end single word char will be repeated
+	// 说明几句 => 说明/几/几句
+	if (rcur->next && rcur->next->off == rcur->off && rcur->next->len > rcur->len)
+	    rcur = rcur->next;
+
+	term.append(qptr + rcur->off, rcur->len);
+	was_acronym = (rcur->attr[0] == 'n' && rcur->attr[1] == 'z') ? true : false;
+	is_cjk_term = CJK::codepoint_is_cjk(*it);
+	last_off = off = rcur->off + rcur->len;
+	rcur = rcur->next;
+
+	// sometimes, auto duality or multisegment
+	// 几句说搞笑 => 几句/句说/搞笑
+	if (rcur && off > rcur->off && (rcur->off + rcur->len) > off)
+	    off = rcur->off;
+	while ((it.raw() - qptr) < off) it++;
+    }
+#else	/* HAVE_SCWS */
     // Look for initials separated by '.' (e.g. P.T.O., U.N.C.L.E).
     // Don't worry if there's a trailing '.' or not.
     if (U_isupper(*it)) {
@@ -662,6 +801,7 @@ QueryParser::Internal::parse_term(Utf8Iterator &it, const Utf8Iterator &end,
 	    }
 	}
     }
+#endif	/* HAVE_SCWS */
     return term;
 }
 
@@ -712,6 +852,32 @@ QueryParser::Internal::parse_query(const string &qs, unsigned flags,
     }
 
     ParserHandler pParser(ParseAlloc());
+
+#ifdef HAVE_SCWS
+    /// Pre segmentation use scws
+    scws_res_t res;
+
+    if (!scws) { 
+	load_libscws(NULL, false, 0);
+    }
+    if (rptr != NULL) {
+	scws_free_result(rptr);
+	rptr = NULL;
+    }
+    qptr = qs.data();
+    scws_send_text(scws, qptr, qs.size());
+    while ((res = scws_get_result(scws)) != NULL) {
+	if (rptr == NULL) { 
+	    rcur = rptr = res;
+        } else { 
+	    rcur->next = res;
+        }
+	while (rcur->next != NULL) { 
+	    rcur = rcur->next;
+	}
+    }
+    rcur = rptr;
+#endif	/* HAVE_SCWS */
 
     unsigned newprev = ' ';
 main_lex_loop:
@@ -1110,6 +1276,11 @@ phrased_term:
 		if (!stemmer.internal.get()) {
 		    // No stemmer is set.
 		    stem_term = STEM_NONE;
+#ifdef HAVE_SCWS
+		} else if (is_cjk_term) {
+		    // Don't stem CJK terms.
+		    stem_term = STEM_NONE;
+#endif
 		} else if (stem_term == STEM_SOME) {
 		    if (!should_stem(unstemmed_term) ||
 			(it != end && is_stem_preventer(*it))) {
@@ -1123,6 +1294,17 @@ phrased_term:
 				       unstemmed_term, stem_term, term_pos++);
 
 	    if (is_cjk_term) {
+#ifdef HAVE_SCWS
+		/* multi scws handler */
+		term_obj->multi.clear();
+		while (rcur && (rcur->off + rcur->len) <= last_off) {
+			if (rcur->len > 3)
+				term_obj->multi.push_back(string(qptr + rcur->off, rcur->len));
+		    rcur = rcur->next;
+		}
+		if (mode == IN_GROUP || mode == IN_GROUP2)
+		    mode = DEFAULT;
+#endif
 		Parse(pParser, CJKTERM, term_obj, &state);
 		if (it == end) break;
 		continue;
@@ -1253,6 +1435,13 @@ phrased_term:
 	}
     }
 done:
+ #ifdef HAVE_SCWS
+    /// Free all segmented terms/words
+    if (rptr != NULL) {
+	scws_free_result(rptr);
+	rptr = NULL;
+    }
+#endif
     if (!state.error) {
 	// Implicitly close any unclosed quotes.
 	if (mode == IN_QUOTES || mode == IN_PREFIXED_QUOTES)
@@ -1451,9 +1640,20 @@ reprocess:
 
 	    // Use the position of the first term for the synonyms.
 	    Xapian::termpos pos = (*begin)->pos;
+#ifdef HAVE_SCWS
+	    string prefix;
+	    const list<string> & prefixes = (*begin)->prefix_info->prefixes;
+	    if (prefixes.begin() != prefixes.end())
+		prefix = *(prefixes.begin());
+	    pos += 66;
+#endif
 	    begin = i;
 	    while (syn != end) {
+#ifdef HAVE_SCWS
+		subqs2.push_back(Query(prefix + *syn, 1, pos++));
+#else
 		subqs2.push_back(Query(*syn, 1, pos));
+#endif
 		++syn;
 	    }
 	    Query q_synonym_terms(Query::OP_SYNONYM, subqs2.begin(), subqs2.end());
@@ -1618,6 +1818,11 @@ class Terms {
 void
 Term::as_positional_cjk_term(Terms * terms) const
 {
+#ifdef HAVE_SCWS
+    // Add SCWS term only
+    Term * c = new Term(state, name, prefix_info, unstemmed, stem, pos);
+    terms->add_positional_term(c);
+#else
     // Add each individual CJK character to the phrase.
     string t;
     for (Utf8Iterator it(name); it != Utf8Iterator(); ++it) {
@@ -1626,6 +1831,7 @@ Term::as_positional_cjk_term(Terms * terms) const
 	terms->add_positional_term(c);
 	t.resize(0);
     }
+#endif	/* HAVE_SCWS */
 
     // FIXME: we want to add the n-grams as filters too for efficiency.
 

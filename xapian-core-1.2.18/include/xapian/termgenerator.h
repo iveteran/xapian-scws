@@ -82,6 +82,11 @@ class XAPIAN_VISIBILITY_DEFAULT TermGenerator {
     /// Set the database to index spelling data to.
     void set_database(const Xapian::WritableDatabase &db);
 
+#if 1   /* HAVE_SCWS */
+    /// hightman.20070706: Specify the dict and rules file for scws, only used when HAVE_SCWS.
+    void load_libscws(const char *fpath, bool xmem = false, int multi = 0);
+#endif
+
     /// Flags to OR together and pass to TermGenerator::set_flags().
     enum flags {
 	/// Index data required for spelling correction.

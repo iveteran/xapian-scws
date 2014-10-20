@@ -57,6 +57,9 @@
 /* Define if pwrite is available on this system */
 #undef HAVE_PWRITE
 
+/* Define to 1 if you want to use scws as default tokenizer */
+#undef HAVE_SCWS
+
 /* Define to 1 if you have the `random' function. */
 #undef HAVE_RANDOM
 

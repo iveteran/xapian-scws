@@ -117,6 +117,40 @@ inline unsigned check_suffix(unsigned ch) {
 #define STOPWORDS_IGNORE 1
 #define STOPWORDS_INDEX_UNSTEMMED_ONLY 2
 
+/// hightman.20070701: load libscws
+#ifdef HAVE_SCWS
+TermGenerator::Internal::~Internal()
+{
+    if (scws != NULL) {
+	scws_free(scws);
+	scws = NULL;
+    }
+}
+
+void 
+TermGenerator::Internal::load_libscws(const char *fpath, bool xmem, int multi)
+{
+    if (scws == NULL) {
+	string temp;
+
+	scws = scws_new();
+	scws_set_charset(scws, "utf8");
+	scws_set_ignore(scws, SCWS_NA);
+	scws_set_duality(scws, SCWS_YEA);
+
+	temp = string(fpath ? fpath : SCWS_ETCDIR) + string("/rules.utf8.ini");
+	scws_set_rule(scws, temp.data());
+	temp = string(fpath ? fpath : SCWS_ETCDIR) + string("/dict.utf8.xdb");
+	scws_set_dict(scws, temp.data(), xmem == true ? SCWS_XDICT_MEM : SCWS_XDICT_XDB);
+	/* hightman.20111209: custom dict support */
+	temp = string(fpath ? fpath : SCWS_ETCDIR) + string("/dict_user.txt");
+	scws_add_dict(scws, temp.data(), SCWS_XDICT_TXT);
+    }
+    if (multi >= 0 && multi < 0x10) 
+	scws_set_multi(scws, (multi<<12));
+}
+#endif
+
 void
 TermGenerator::Internal::index_text(Utf8Iterator itor, termcount wdf_inc,
 				    const string & prefix, bool with_positions)
@@ -127,6 +161,37 @@ TermGenerator::Internal::index_text(Utf8Iterator itor, termcount wdf_inc,
 
     if (!stopper) stop_mode = STOPWORDS_NONE;
 
+#ifdef HAVE_SCWS
+    int last_endpos = 0, last_off = 0;
+    scws_res_t res, cur;
+    Utf8Iterator iterm;
+    const char *text = itor.raw();
+
+    if (!scws) load_libscws(NULL, false, 0);
+    scws_send_text(scws, text, itor.left());
+    while ((res = cur = scws_get_result(scws)) != NULL) { while (cur != NULL) {
+	string term;
+
+	iterm.assign(text + cur->off, cur->len);
+	if (!Unicode::is_wordchar(*iterm)) {
+	    cur = cur->next;
+	    continue;
+	}
+	term = Unicode::tolower(string(text + cur->off, cur->len));
+	if (with_positions) {
+	    /// for part word(short, duality)
+	    if ((cur->off + cur->len) <= last_endpos)
+		--termpos;
+	    else {
+		/// for dualities' first single word
+		if (cur->off == last_off)
+		    --termpos;
+		last_endpos = cur->off + cur->len;
+	    }
+	}
+	last_off = cur->off;
+	cur = cur->next;
+#else
     while (true) {
 	// Advance to the start of the next term.
 	unsigned ch;
@@ -265,6 +330,7 @@ TermGenerator::Internal::index_text(Utf8Iterator itor, termcount wdf_inc,
 	}
 
 endofterm:
+#endif	/* HAVE_SCWS */
 	if (term.size() > max_word_length) continue;
 
 	if (stop_mode == STOPWORDS_IGNORE && (*stopper)(term)) continue;
@@ -277,6 +343,10 @@ endofterm:
 		doc.add_term(prefix + term, wdf_inc);
 	    }
 	}
+#ifdef HAVE_SCWS
+	/// hightman: Term start with CJK character needn't spell & stem
+	if (CJK::codepoint_is_cjk(*iterm)) continue;
+#endif
 	if ((flags & FLAG_SPELLING) && prefix.empty()) db.add_spelling(term);
 
 	if (strategy == TermGenerator::STEM_NONE ||
@@ -305,6 +375,9 @@ endofterm:
 	    doc.add_term(stem, wdf_inc);
 	}
     }
+#ifdef HAVE_SCWS
+    scws_free_result(res); }
+#endif
 }
 
 }
